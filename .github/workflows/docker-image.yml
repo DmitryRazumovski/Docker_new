@@ -1,4 +1,4 @@
-name: Docker Image CI/CD Pipeline
+name: CI & Deploy
 
 on:
   push:
@@ -7,7 +7,6 @@ on:
 jobs:
   build-test-deploy:
     runs-on: self-hosted
-    
     services:
       postgres:
         image: postgres:14
@@ -18,59 +17,41 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U kubsu -d kubsu"
+          --health-cmd "pg_isready -U kubsu"
           --health-interval 10s
           --health-timeout 5s
-          --health-retries 10
+          --health-retries 5
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Install PostgreSQL client
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client
-
       - name: Wait for Postgres
         run: |
-          echo "Waiting for PostgreSQL to become ready..."
-          for i in {1..20}; do
-            if docker ps --filter "health=healthy" --format "{{.Names}}" | grep -q "${{ job.services.postgres.id }}"; then
-              echo "PostgreSQL is ready!"
-              break
-            fi
-            echo "Attempt $i/20 - Waiting..."
-            sleep 5
+          until pg_isready -h localhost -p 5432 -U kubsu; do
+            echo "Waiting for Postgres..."
+            sleep 2
           done
 
       - name: Initialize DB from dump
-        run: |
-          echo "Checking dump file existence..."
-          if [ ! -f kubsu/dump.sql ]; then
-            echo "Error: dump.sql file not found!"
-            exit 1
-          fi
+        run: psql postgresql://kubsu:kubsu@localhost:5432/kubsu -f kubsu/dump.sql
 
-          echo "Initializing database..."
-          PGPASSWORD=kubsu psql \
-            -h localhost \
-            -U kubsu \
-            -d kubsu \
-            -f kubsu/dump.sql || echo "DB initialization completed with warnings"
+      - name: Build Docker image
+        run: docker build -t myapp:test .
 
-      - name: Build and test
+      - name: Build test image
+        run: docker build --target builder -t myapp:test .
+
+      - name: Run tests
         run: |
-          docker build --target builder -t myapp:test .
-          
           docker run --rm \
             --network host \
-            -e DATABASE_URL=postgresql://kubsu:kubsu@localhost:5432/kubsu \
             -e PYTHONPATH=/app \
             myapp:test \
             pytest tests
 
-      - name: Build production image
+
+      - name: Build prod image
         run: docker build -t myapp:latest .
 
       - name: Set up SSH
@@ -85,12 +66,9 @@ jobs:
                 -p ${{ secrets.SSH_PORT }} \
                 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "podman load && \
-             podman tag localhost/myapp:latest myapp:latest && \
-             podman stop myapp || true && \
-             podman rm myapp || true && \
+             podman tag myapp:latest myapp:latest && \
              podman run -d \
                --name myapp \
                --network host \
-               -p 8024:8024 \
                myapp:latest \
                uvicorn src.main:app --host 0.0.0.0 --port 8024"
