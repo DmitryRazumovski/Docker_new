@@ -61,13 +61,13 @@ jobs:
 
       - name: Deploy to remote server
         run: |
-          docker save myapp:latest | \
+            docker save myapp:latest | \
             ssh -o StrictHostKeyChecking=no \
-                -p ${{ secrets.SSH_PORT }} \
-                ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+              -p ${{ secrets.SSH_PORT }} \
+              ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "podman load && \
-             podman tag myapp:latest myapp:latest && \
-             podman run -d \
+             podman tag localhost/myapp:latest myapp:latest && \
+             podman run -d --replace \
                --name myapp \
                --network host \
                myapp:latest \
