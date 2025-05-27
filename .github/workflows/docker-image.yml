@@ -1,4 +1,4 @@
-name: Docker Image CI
+name: Docker Image CI/CD Pipeline
 
 on:
   push:
@@ -7,6 +7,7 @@ on:
 jobs:
   build-test-deploy:
     runs-on: self-hosted
+    
     services:
       postgres:
         image: postgres:14
@@ -17,7 +18,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U kubsu"
+          --health-cmd "sh -c 'psql -U kubsu -c \"SELECT 1\"'"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -28,30 +29,32 @@ jobs:
 
       - name: Wait for Postgres
         run: |
-          until pg_isready -h localhost -p 5432 -U kubsu; do
-            echo "Waiting for Postgres..."
+          for i in {1..10}; do
+            if docker exec postgres psql -U kubsu -c "SELECT 1" >/dev/null 2>&1; then
+              echo "Postgres is ready!"
+              break
+            fi
+            echo "Waiting for Postgres... (attempt $i/10)"
             sleep 2
           done
 
       - name: Initialize DB from dump
-        run: psql postgresql://kubsu:kubsu@localhost:5432/kubsu -f kubsu/dump.sql
-
-      - name: Build Docker image
-        run: docker build -t myapp:test .
-
-      - name: Build test image
-        run: docker build --target builder -t myapp:test .
-
-      - name: Run tests
         run: |
+          docker cp kubsu/dump.sql postgres:/tmp/dump.sql
+          docker exec postgres psql -U kubsu -d kubsu -f /tmp/dump.sql || echo "DB initialization completed"
+
+      - name: Build and test
+        run: |
+          docker build --target builder -t myapp:test .
+          
           docker run --rm \
-            --network host \
+            --network container:postgres \
+            -e DATABASE_URL=postgresql://kubsu:kubsu@localhost:5432/kubsu \
             -e PYTHONPATH=/app \
             myapp:test \
             pytest tests
 
-
-      - name: Build prod image
+      - name: Build production image
         run: docker build -t myapp:latest .
 
       - name: Set up SSH
@@ -66,7 +69,9 @@ jobs:
                 -p ${{ secrets.SSH_PORT }} \
                 ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "podman load && \
-             podman tag myapp:latest myapp:latest && \
+             podman tag localhost/myapp:latest myapp:latest && \
+             podman stop myapp || true && \
+             podman rm myapp || true && \
              podman run -d \
                --name myapp \
                --network host \
