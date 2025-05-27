@@ -30,7 +30,7 @@ jobs:
       - name: Wait for Postgres
         run: |
           for i in {1..10}; do
-            if docker exec postgres psql -U kubsu -c "SELECT 1" >/dev/null 2>&1; then
+            if docker exec ${{ job.services.postgres.id }} psql -U kubsu -c "SELECT 1" >/dev/null 2>&1; then
               echo "Postgres is ready!"
               break
             fi
@@ -40,15 +40,19 @@ jobs:
 
       - name: Initialize DB from dump
         run: |
-          docker cp kubsu/dump.sql postgres:/tmp/dump.sql
-          docker exec postgres psql -U kubsu -d kubsu -f /tmp/dump.sql || echo "DB initialization completed"
+          # Получаем ID контейнера Postgres
+          CONTAINER_ID=$(docker ps -qf "name=${{ job.services.postgres.id }}")
+          # Копируем dump файл в контейнер
+          docker cp kubsu/dump.sql ${CONTAINER_ID}:/tmp/dump.sql
+          # Инициализируем БД
+          docker exec ${CONTAINER_ID} psql -U kubsu -d kubsu -f /tmp/dump.sql || echo "DB initialization completed"
 
       - name: Build and test
         run: |
           docker build --target builder -t myapp:test .
           
           docker run --rm \
-            --network container:postgres \
+            --network container:${{ job.services.postgres.id }} \
             -e DATABASE_URL=postgresql://kubsu:kubsu@localhost:5432/kubsu \
             -e PYTHONPATH=/app \
             myapp:test \
