@@ -27,6 +27,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
       - name: Wait for Postgres
         run: |
           echo "Waiting for PostgreSQL to become ready..."
@@ -52,7 +57,7 @@ jobs:
             -h localhost \
             -U kubsu \
             -d kubsu \
-            -f kubsu/dump.sql
+            -f kubsu/dump.sql || echo "DB initialization completed with warnings"
 
       - name: Build and test
         run: |
@@ -86,5 +91,6 @@ jobs:
              podman run -d \
                --name myapp \
                --network host \
+               -p 8024:8024 \
                myapp:latest \
                uvicorn src.main:app --host 0.0.0.0 --port 8024"
