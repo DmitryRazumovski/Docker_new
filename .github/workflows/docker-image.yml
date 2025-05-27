@@ -18,10 +18,10 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "sh -c 'psql -U kubsu -c \"SELECT 1\"'"
+          --health-cmd "pg_isready -U kubsu -d kubsu"
           --health-interval 10s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
 
     steps:
       - name: Checkout code
@@ -29,30 +29,37 @@ jobs:
 
       - name: Wait for Postgres
         run: |
-          for i in {1..10}; do
-            if docker exec ${{ job.services.postgres.id }} psql -U kubsu -c "SELECT 1" >/dev/null 2>&1; then
-              echo "Postgres is ready!"
+          echo "Waiting for PostgreSQL to become ready..."
+          for i in {1..20}; do
+            if docker ps --filter "health=healthy" --format "{{.Names}}" | grep -q "${{ job.services.postgres.id }}"; then
+              echo "PostgreSQL is ready!"
               break
             fi
-            echo "Waiting for Postgres... (attempt $i/10)"
-            sleep 2
+            echo "Attempt $i/20 - Waiting..."
+            sleep 5
           done
 
       - name: Initialize DB from dump
         run: |
-          # Получаем ID контейнера Postgres
-          CONTAINER_ID=$(docker ps -qf "name=${{ job.services.postgres.id }}")
-          # Копируем dump файл в контейнер
-          docker cp kubsu/dump.sql ${CONTAINER_ID}:/tmp/dump.sql
-          # Инициализируем БД
-          docker exec ${CONTAINER_ID} psql -U kubsu -d kubsu -f /tmp/dump.sql || echo "DB initialization completed"
+          echo "Checking dump file existence..."
+          if [ ! -f kubsu/dump.sql ]; then
+            echo "Error: dump.sql file not found!"
+            exit 1
+          fi
+
+          echo "Initializing database..."
+          PGPASSWORD=kubsu psql \
+            -h localhost \
+            -U kubsu \
+            -d kubsu \
+            -f kubsu/dump.sql
 
       - name: Build and test
         run: |
           docker build --target builder -t myapp:test .
           
           docker run --rm \
-            --network container:${{ job.services.postgres.id }} \
+            --network host \
             -e DATABASE_URL=postgresql://kubsu:kubsu@localhost:5432/kubsu \
             -e PYTHONPATH=/app \
             myapp:test \
